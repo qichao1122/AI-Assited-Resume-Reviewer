@@ -1,8 +1,6 @@
 from pypdf import PdfReader
 
 def get_resume(file_path):
-    #file_path = r"C:\Users\qicha\OneDrive\桌面\Resume.pdf"
-
     reader = PdfReader(file_path)
 
     resume_text = ""
@@ -18,19 +16,30 @@ def get_resume(file_path):
 
 def extract_skills(text):
     skills =[
+        "Python",
+        "Java",
+        "JavaScript",
         "Programming",
         "Large Language Models (LLMs)",
+        "Machine Learning",
         "Data Analysis",
-        "Structured Query Language(SQL)",
+        "Structured Query Language (SQL)",
+        "SQL",
         "CI/CD",
-        "GitHub"
+        "GitHub",
+        "Git",
+        "AWS",
+        "Azure",
+        "Docker",
+        "Excel",
     ]
 
-    found = []
+    found = set()
 
     for skill in skills:
         if skill.lower() in text.lower():
-            found.append(skill)
+            found.add(skill)
+
 
     return found
 

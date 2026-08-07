@@ -1,20 +1,16 @@
 from llm import get_llm
+from resume import extract_skills
 
+def _keyword_result(resume_skills, job_skills):
+    """Fallback scoring when the LLM isn't available: simple overlap %."""
 
-def keyword_match_score(resume_skills, job_skills):
-    """Fallback scoring when no LLM is available: simple overlap %."""
     if not job_skills:
-        return 0, [], []
+        return "Score: 0\nCouldn't detect any known skills in that job description."
 
-    resume_lower = [skill.lower() for skill in resume_skills]
-    matched = [skill for skill in job_skills if skill.lower() in resume_lower]
+    matched = [skill for skill in resume_skills if skill.lower() in job_skills]
     missing = [skill for skill in job_skills if skill not in matched]
     score = round(len(matched) / len(job_skills) * 100)
-    return score, matched, missing
 
-
-def _keyword_result(resume_skills, job):
-    score, matched, missing = keyword_match_score(resume_skills, job["skills"])
     return (
         f"Score: {score}/100\n"
         f"Matched skills: {', '.join(matched) if matched else 'none'}\n"
@@ -22,7 +18,7 @@ def _keyword_result(resume_skills, job):
     )
 
 
-def analyze_jobs(resume_text, resume_skills, jobs):
+def analyze_jobs(resume_text, resume_skills, job_title, job_description_text):
     """
     Compare a resume against a list of job dicts ({"title", "skills"}).
     Uses the LLM if available; falls back to keyword matching per-job
@@ -31,30 +27,28 @@ def analyze_jobs(resume_text, resume_skills, jobs):
     Returns a list of {"title": str, "analysis": str}.
     """
     llm = get_llm()
-    results = []
+    job_skills = extract_skills(resume_text)
 
-    for job in jobs:
-        if llm is not None:
-            prompt = (
-                "You are a helpful career advisor. Given the resume below, "
-                f"evaluate fit for the role of '{job['title']}', which requires "
-                f"these skills: {', '.join(job['skills'])}.\n\n"
-                f"Resume:\n{resume_text}\n\n"
-                "Respond in this exact format:\n"
-                "Score: <0-100>\n"
-                "Explanation: <2-3 sentences on strengths and gaps>"
-            )
-            try:
-                response = llm.invoke(prompt)
-                analysis = response.content
-            except Exception as e:
-                analysis = (
+    if llm is not None:
+        prompt = (
+            "You are a career expert. Given the resume below, "
+            f"evaluate fit for the role of '{job_title['title']}', which requires "
+            f"these skills: {', '.join(job_skills['skills'])}.\n\n"
+            f"Resume:\n{resume_text}\n\n"
+            "Respond in this exact format:\n"
+            "Score: <0-100>\n"
+            "Explanation: <2-3 sentences on strengths and gaps>"
+        )
+        try:
+            response = llm.invoke(prompt)
+            analysis = response.content
+        except Exception as e:
+            analysis = (
                     f"(LLM unavailable, used keyword match instead — {e})\n"
-                    + _keyword_result(resume_skills, job)
-                )
-        else:
-            analysis = _keyword_result(resume_skills, job)
+                    + _keyword_result(resume_skills, job_skills)
+            )
+    else:
+        analysis = _keyword_result(resume_skills, job_skills)
 
-        results.append({"title": job["title"], "analysis": analysis})
 
-    return results
+    return {"title": job_title, "analysis": analysis}
