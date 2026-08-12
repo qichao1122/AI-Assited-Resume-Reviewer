@@ -7,15 +7,18 @@ def get_resume(file_path):
 
     for index, page in enumerate(reader.pages):
         text = page.extract_text(extraction_mode="layout")
-        print(text)
 
-        resume_text += text + "\n"
+        if text:
+            resume_text += text + "\n"
 
-    print("Full Resume:")
-    print(resume_text)
+    return resume_text
+
 
 def extract_skills(text):
-    skills =[
+    if not text:
+        return set()
+
+    skills = [
         "Python",
         "Java",
         "JavaScript",
@@ -35,15 +38,10 @@ def extract_skills(text):
     ]
 
     found = set()
+    text_lower = text.lower()
 
     for skill in skills:
-        if skill.lower() in text.lower():
+        if skill.lower() in text_lower:
             found.add(skill)
 
-
     return found
-
-
-
-
-
