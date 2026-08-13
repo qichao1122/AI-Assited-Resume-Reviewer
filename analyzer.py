@@ -32,8 +32,8 @@ def analyze_jobs(resume_text, resume_skills, job_title, job_description_text):
     if llm is not None:
         prompt = (
             "You are a career expert. Given the resume below, "
-            f"evaluate fit for the role of '{job_title['title']}', which requires "
-            f"these skills: {', '.join(job_skills['skills'])}.\n\n"
+            f"evaluate fit for the role of '{job_title}', which requires "
+            f"these skills: {', '.join(job_skills)}.\n\n"
             f"Resume:\n{resume_text}\n\n"
             "Respond in this exact format:\n"
             "Score: <0-100>\n"
