@@ -1,7 +1,7 @@
 import streamlit as st
 
 from resume import get_resume, extract_skills
-from analyzer import analyze_jobs
+from analyzer import analyze_job
 import job_scraper
 import databse
 
@@ -133,9 +133,12 @@ def job_analysis(resume_file, resume_text, skills_found):
     if not job_description_text:
         return
 
+    with st.expander("Job description text used for analysis (verify this looks right!)"):
+        st.text(job_description_text[:2000] + ("..." if len(job_description_text) > 2000 else ""))
+
     title = job_title_input.strip() or "Job posting"
     with st.spinner("Analyzing fit..."):
-        result = analyze_jobs(resume_text, skills_found, title, job_description_text)
+        result = analyze_job(resume_text, skills_found, title, job_description_text)
 
     st.subheader("AI Recommendation")
     st.markdown(f"**{result['title']}**")

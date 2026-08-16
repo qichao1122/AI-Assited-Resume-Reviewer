@@ -9,15 +9,31 @@ HEADERS = {
     )
 }
 
+# Phrases that show up on JS-rendered app shells / bot-block pages instead
+# of real content. If these dominate the page, the real job description
+# almost certainly wasn't in the HTML we got back.
+JS_REQUIRED_MARKERS = [
+    "enable javascript",
+    "please enable cookies",
+    "verify you are human",
+    "checking your browser",
+    "just a moment",
+]
+
+MIN_USABLE_LENGTH = 200  # short static-only fetches are usually shell/boilerplate, not a real posting
+
 
 def get_job_description(url, timeout=10):
     """
     Fetch a job posting URL and return its cleaned, visible text.
 
     Raises RuntimeError with a user-friendly message on failure — callers
-    should catch this and offer the "paste the text manually" fallback,
-    since many job boards (LinkedIn, Indeed, etc.) block bots or require
-    JavaScript/login and simply won't work with this approach.
+    should catch this and offer the "paste the text manually" fallback.
+    Many career sites (Workday, iCIMS, and most large-company ATS pages,
+    including Walgreens') render the actual posting with JavaScript, so a
+    plain HTTP fetch like this one often gets only the page shell, not the
+    real description. This function tries to detect that case rather than
+    silently returning junk.
     """
     try:
         response = requests.get(url, headers=HEADERS, timeout=timeout)
@@ -38,11 +54,19 @@ def get_job_description(url, timeout=10):
     lines = [line for line in lines if line]
     cleaned = "\n".join(lines)
 
-    if len(cleaned) < 50:
+    lowered = cleaned.lower()
+    if any(marker in lowered for marker in JS_REQUIRED_MARKERS):
         raise RuntimeError(
-            "That page had little or no readable text once scripts/styles "
-            "were stripped out — it likely needs JavaScript to render. "
-            "Try pasting the job description text instead."
+            "This page needs JavaScript to load the actual job description "
+            "— a plain fetch only got the page shell, not the real content. "
+            "Please paste the job description text instead."
+        )
+
+    if len(cleaned) < MIN_USABLE_LENGTH:
+        raise RuntimeError(
+            "That page had very little readable text once scripts/styles "
+            "were stripped out — it likely needs JavaScript to render the "
+            "actual posting. Please paste the job description text instead."
         )
 
     return cleaned
