@@ -52,9 +52,8 @@ def login_signup():
                 else:
                     st.error(msg)
 
-def main_app():
-    user = st.session_state.user
 
+def logout(user):
     with st.sidebar:
         st.write(f"Logged in as **{user['email']}**")
         if st.button("Log out"):
@@ -62,33 +61,43 @@ def main_app():
             st.session_state.current_resume_id = None
             st.rerun()
 
+
+def upload_resume(user):
     st.title("Resume Reviewer")
-
-
     st.subheader("Your resume")
     resume_file = st.file_uploader("Upload your resume (PDF)", type="pdf")
 
     resume_text = None
     skills_found = []
 
-    if resume_file:
-        resume_text = get_resume(resume_file)
+    if not resume_file:
+        return resume_file, resume_text, skills_found
+
+    resume_text = get_resume(resume_file)
+
+    if not resume_text:
+        st.error(
+            "Couldn't extract any text from that PDF. It may be a scanned "
+            "image rather than a text-based PDF."
+        )
+        return resume_file, None, []
+
+    skills_found = extract_skills(resume_text)
+
+    st.success("Resume uploaded successfully.")
+    with st.expander("Extracted resume text"):
         st.write(resume_text)
-        st.write(type(resume_text))
-        skills_found = extract_skills(resume_text)
+    st.write("**Detected skills:**", ", ".join(skills_found) if skills_found else "none detected")
 
-        st.success("Resume uploaded successfully.")
-        with st.expander("Extracted resume text"):
-            st.write(resume_text)
-        st.write("**Detected skills:**", ", ".join(skills_found) if skills_found else "none detected")
+    if st.button("Save resume to my account"):
+        resume_id = databse.save_resume(user["id"], resume_file.name, resume_text)
+        st.session_state.current_resume_id = resume_id
+        st.success("Saved.")
 
-        if st.button("Save resume to my account"):
-            resume_id = databse.save_resume(user["id"], resume_file.name, resume_text)
-            st.session_state.current_resume_id = resume_id
-            st.success("Saved.")
+    return resume_file, resume_text, skills_found
 
-    st.divider()
 
+def job_analysis(resume_file, resume_text, skills_found):
     st.subheader("Job posting")
     job_title_input = st.text_input("Job title (used to label the result)", placeholder="e.g. Software Engineer")
     job_url = st.text_input("Job posting URL", placeholder="https://...")
@@ -98,41 +107,48 @@ def main_app():
         height=150,
     )
 
-    if st.button("Analyze fit", type="primary"):
-        if not resume_file:
-            st.error("Upload a resume first.")
-        elif not job_url.strip() and not job_text_manual.strip():
-            st.error("Enter a job posting URL or paste the description text.")
-        else:
-            job_description_text = None
+    if not st.button("Analyze fit", type="primary"):
+        return
 
-            if job_text_manual.strip():
-                job_description_text = job_text_manual.strip()
-            else:
-                with st.spinner("Fetching job posting..."):
-                    try:
-                        job_description_text = job_scraper.get_job_description(job_url.strip())
-                    except RuntimeError as e:
-                        st.error(str(e))
+    if not resume_file:
+        st.error("Upload a resume first.")
+        return
+    if not resume_text:
+        st.error("That resume had no readable text — re-upload a text-based PDF first.")
+        return
+    if not job_url.strip() and not job_text_manual.strip():
+        st.error("Enter a job posting URL or paste the description text.")
+        return
 
-            if job_description_text:
-                title = job_title_input.strip() or "Job posting"
-                with st.spinner("Analyzing fit..."):
-                    result = analyze_jobs(resume_text, skills_found, title, job_description_text)
+    job_description_text = None
+    if job_text_manual.strip():
+        job_description_text = job_text_manual.strip()
+    else:
+        with st.spinner("Fetching job posting..."):
+            try:
+                job_description_text = job_scraper.get_job_description(job_url.strip())
+            except RuntimeError as e:
+                st.error(str(e))
 
-                st.subheader("AI Recommendation")
-                st.markdown(f"**{result['title']}**")
-                st.write(result["analysis"])
+    if not job_description_text:
+        return
 
-                resume_id = st.session_state.current_resume_id
-                if resume_id:
-                    databse.save_analysis(resume_id, result["title"], result["analysis"])
-                else:
-                    st.info("Save your resume above if you'd like this analysis kept in your history.")
+    title = job_title_input.strip() or "Job posting"
+    with st.spinner("Analyzing fit..."):
+        result = analyze_jobs(resume_text, skills_found, title, job_description_text)
 
-    st.divider()
+    st.subheader("AI Recommendation")
+    st.markdown(f"**{result['title']}**")
+    st.write(result["analysis"])
+
+    resume_id = st.session_state.current_resume_id
+    if resume_id:
+        databse.save_analysis(resume_id, result["title"], result["analysis"])
+    else:
+        st.info("Save your resume above if you'd like this analysis kept in your history.")
 
 
+def resume_history(user):
     st.subheader("Your saved resumes")
     resumes = databse.get_user_resumes(user["id"])
     if not resumes:
@@ -150,6 +166,20 @@ def main_app():
                         st.markdown(f"*{a['job_title']}* — {a['created_at'][:19]}")
                         st.write(a["result"])
                         st.markdown("---")
+
+
+def main_app():
+    user = st.session_state.user
+
+    logout(user)
+
+    resume_file, resume_text, skills_found = upload_resume(user)
+    st.divider()
+
+    job_analysis(resume_file, resume_text, skills_found)
+    st.divider()
+
+    resume_history(user)
 
 
 if st.session_state.user is None:
