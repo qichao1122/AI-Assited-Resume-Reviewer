@@ -1,4 +1,4 @@
-# Job Hunter
+# AI Assisted Resume Reviewer
 
 A Streamlit app for reviewing resumes against job postings.
 
