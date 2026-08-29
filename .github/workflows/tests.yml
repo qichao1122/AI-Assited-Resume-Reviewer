@@ -1,4 +1,4 @@
-name: Job Hunter CI
+name: AI Assisted Resume Reviewer
 
 on:
   push:
