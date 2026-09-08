@@ -1,9 +1,9 @@
 import streamlit as st
 
-from resume import get_resume, extract_skills
-from analyzer import analyze_job
-import job_scraper
 import databse
+import job_scraper
+from resume import get_resume, extract_skills
+from analyzer import analyze_job, suggest_resume_improvements, generate_cover_letter
 
 st.set_page_config(page_title="Job Hunter")
 databse.init_db()
@@ -12,6 +12,10 @@ if "user" not in st.session_state:
     st.session_state.user = None
 if "current_resume_id" not in st.session_state:
     st.session_state.current_resume_id = None
+if "current_job_description" not in st.session_state:
+    st.session_state.current_job_description = None
+if "current_job_title" not in st.session_state:
+    st.session_state.current_job_title = None
 
 
 def login_signup():
@@ -65,13 +69,37 @@ def logout(user):
 def upload_resume(user):
     st.title("Resume Reviewer")
     st.subheader("Your resume")
-    resume_file = st.file_uploader("Upload your resume (PDF)", type="pdf")
 
     resume_text = None
     skills_found = []
 
+    saved_resumes = databse.get_user_resumes(user["id"])
+
+    if saved_resumes:
+        options = ["Upload a new resume"] + [
+            f"{r['filename']} — {r['uploaded_at'][:19]}" for r in saved_resumes
+        ]
+        choice = st.selectbox("Use a saved resume, or upload a new one", options)
+
+        if choice != "Upload a new resume":
+            selected = saved_resumes[options.index(choice) - 1]
+            resume_text = selected["resume_text"]
+            skills_found = extract_skills(resume_text)
+            st.session_state.current_resume_id = selected["id"]
+
+            st.success(f"Using saved resume: {selected['filename']}")
+            with st.expander("Resume text"):
+                st.write(resume_text)
+            st.write(
+                "**Detected skills:**",
+                ", ".join(skills_found) if skills_found else "none detected",
+            )
+            return resume_text, skills_found
+
+    resume_file = st.file_uploader("Upload your resume (PDF)", type="pdf")
+
     if not resume_file:
-        return resume_file, resume_text, skills_found
+        return resume_text, skills_found
 
     resume_text = get_resume(resume_file)
 
@@ -80,26 +108,31 @@ def upload_resume(user):
             "Couldn't extract any text from that PDF. It may be a scanned "
             "image rather than a text-based PDF."
         )
-        return resume_file, None, []
+        return None, []
 
     skills_found = extract_skills(resume_text)
 
     st.success("Resume uploaded successfully.")
     with st.expander("Extracted resume text"):
         st.write(resume_text)
-    st.write("**Detected skills:**", ", ".join(skills_found) if skills_found else "none detected")
+    st.write(
+        "**Detected skills:**",
+        ", ".join(skills_found) if skills_found else "none detected",
+    )
 
     if st.button("Save resume to my account"):
         resume_id = databse.save_resume(user["id"], resume_file.name, resume_text)
         st.session_state.current_resume_id = resume_id
-        st.success("Saved.")
+        st.success("Saved. It'll now show up in the dropdown above on your next visit.")
 
-    return resume_file, resume_text, skills_found
+    return resume_text, skills_found
 
 
-def job_analysis(resume_file, resume_text, skills_found):
+def job_analysis(resume_text):
     st.subheader("Job posting")
-    job_title_input = st.text_input("Job title (used to label the result)", placeholder="e.g. Software Engineer")
+    job_title_input = st.text_input(
+        "Job title (used to label the result)", placeholder="e.g. Software Engineer"
+    )
     job_url = st.text_input("Job posting URL", placeholder="https://...")
     job_text_manual = st.text_area(
         "Or paste the job description text directly "
@@ -107,48 +140,90 @@ def job_analysis(resume_file, resume_text, skills_found):
         height=150,
     )
 
-    if not st.button("Analyze fit", type="primary"):
-        return
+    if st.button("Load job description"):
+        if not resume_text:
+            st.error("Upload or select a resume first.")
+        elif not job_url.strip() and not job_text_manual.strip():
+            st.error("Enter a job posting URL or paste the description text.")
+        else:
+            job_description_text = None
+            if job_text_manual.strip():
+                job_description_text = job_text_manual.strip()
+            else:
+                with st.spinner("Fetching job posting..."):
+                    try:
+                        job_description_text = job_scraper.get_job_description(job_url.strip())
+                    except RuntimeError as e:
+                        st.error(str(e))
 
-    if not resume_file:
-        st.error("Upload a resume first.")
-        return
-    if not resume_text:
-        st.error("That resume had no readable text — re-upload a text-based PDF first.")
-        return
-    if not job_url.strip() and not job_text_manual.strip():
-        st.error("Enter a job posting URL or paste the description text.")
-        return
+            if job_description_text:
+                st.session_state.current_job_description = job_description_text
+                st.session_state.current_job_title = job_title_input.strip() or "Job posting"
+                st.success("Job description loaded — pick an action below.")
 
-    job_description_text = None
-    if job_text_manual.strip():
-        job_description_text = job_text_manual.strip()
-    else:
-        with st.spinner("Fetching job posting..."):
-            try:
-                job_description_text = job_scraper.get_job_description(job_url.strip())
-            except RuntimeError as e:
-                st.error(str(e))
+    job_description_text = st.session_state.get("current_job_description")
+    title = st.session_state.get("current_job_title", "Job posting")
 
     if not job_description_text:
         return
 
-    with st.expander("Job description text used for analysis (verify this looks right!)"):
+    with st.expander("Job description text in use (verify this looks right!)"):
         st.text(job_description_text[:2000] + ("..." if len(job_description_text) > 2000 else ""))
 
-    title = job_title_input.strip() or "Job posting"
-    with st.spinner("Analyzing fit..."):
-        result = analyze_job(resume_text, skills_found, title, job_description_text)
+    applicant_name = st.text_input(
+        "Your name (for the cover letter sign-off, optional)", placeholder="e.g. Jane Doe"
+    )
 
-    st.subheader("AI Recommendation")
-    st.markdown(f"**{result['title']}**")
-    st.write(result["analysis"])
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        analyze_clicked = st.button("Analyze fit", type="primary")
+    with col2:
+        suggest_clicked = st.button("Suggest improvements")
+    with col3:
+        cover_letter_clicked = st.button("Generate cover letter")
+
+    if not (analyze_clicked or suggest_clicked or cover_letter_clicked):
+        return
 
     resume_id = st.session_state.current_resume_id
-    if resume_id:
-        databse.save_analysis(resume_id, result["title"], result["analysis"])
-    else:
-        st.info("Save your resume above if you'd like this analysis kept in your history.")
+
+    if analyze_clicked:
+        with st.spinner("Analyzing fit..."):
+            result = analyze_job(resume_text, title, job_description_text)
+        st.subheader("AI Recommendation")
+        st.markdown(f"**{result['title']}**")
+        st.write(result["analysis"])
+        if resume_id:
+            databse.save_analysis(resume_id, result["title"], result["analysis"], kind="fit_analysis")
+        else:
+            st.info("Save your resume above if you'd like this kept in your history.")
+
+    if suggest_clicked:
+        with st.spinner("Working out improvement suggestions..."):
+            suggestions = suggest_resume_improvements(resume_text, job_description_text)
+        st.subheader("Resume Improvement Suggestions")
+        st.write(suggestions)
+        if resume_id:
+            databse.save_analysis(resume_id, title, suggestions, kind="improvement_suggestions")
+        else:
+            st.info("Save your resume above if you'd like this kept in your history.")
+
+    if cover_letter_clicked:
+        with st.spinner("Drafting cover letter..."):
+            cover_letter = generate_cover_letter(resume_text, title, job_description_text, applicant_name)
+        st.subheader("Cover Letter Draft")
+        st.text_area("Draft (copy from here)", value=cover_letter, height=300)
+        if resume_id:
+            databse.save_analysis(resume_id, title, cover_letter, kind="cover_letter")
+        else:
+            st.info("Save your resume above if you'd like this kept in your history.")
+
+
+_KIND_LABELS = {
+    "fit_analysis": "Fit analysis",
+    "improvement_suggestions": "Improvement suggestions",
+    "cover_letter": "Cover letter",
+}
 
 
 def resume_history(user):
@@ -164,9 +239,10 @@ def resume_history(user):
 
                 analyses = databse.get_analyses_for_resume(r["id"])
                 if analyses:
-                    st.markdown("**Past analyses:**")
+                    st.markdown("**Past results:**")
                     for a in analyses:
-                        st.markdown(f"*{a['job_title']}* — {a['created_at'][:19]}")
+                        label = _KIND_LABELS.get(a.get("kind", "fit_analysis"), "Result")
+                        st.markdown(f"*{a['job_title']}* — {label} — {a['created_at'][:19]}")
                         st.write(a["result"])
                         st.markdown("---")
 
@@ -176,10 +252,10 @@ def main_app():
 
     logout(user)
 
-    resume_file, resume_text, skills_found = upload_resume(user)
+    resume_text, _skills_found = upload_resume(user)
     st.divider()
 
-    job_analysis(resume_file, resume_text, skills_found)
+    job_analysis(resume_text)
     st.divider()
 
     resume_history(user)
