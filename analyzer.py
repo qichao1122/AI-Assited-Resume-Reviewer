@@ -1,5 +1,23 @@
+import re
+
 from llm import get_llm
 from resume import extract_keywords_from_job
+
+
+def parse_score(analysis_text):
+    """
+    Pull the numeric score out of an analysis result string like
+    "Score: 85\n...". Returns None if no score line is found, so callers
+    can distinguish "no score" from "score of 0" and skip it in
+    aggregates rather than treating it as a real zero.
+    """
+    if not analysis_text:
+        return None
+    match = re.search(r"score:\s*(\d{1,3})", analysis_text, re.IGNORECASE)
+    if not match:
+        return None
+    score = int(match.group(1))
+    return max(0, min(100, score))  # clamp in case the LLM returns something out of range
 
 
 def keyword_result(resume_text, job_description_text):

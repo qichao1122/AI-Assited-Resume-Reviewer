@@ -58,8 +58,19 @@ def init_db():
         )
     """)
 
+    # "kind" distinguishes fit-score analyses from improvement suggestions
+    # and cover letters. Added via ALTER so existing databases created
+    # before this feature still work without deleting job_hunter.db.
+    try:
+        cur.execute("ALTER TABLE analyses ADD COLUMN kind TEXT NOT NULL DEFAULT 'fit_analysis'")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------- auth ----
 
 
 def hash_password(password, salt=None):
@@ -106,6 +117,9 @@ def verify_user(email, password):
     return None
 
 
+# ------------------------------------------------------------- resumes ----
+
+
 def save_resume(user_id, filename, resume_text):
     conn = get_connection()
     cur = conn.cursor()
@@ -131,12 +145,31 @@ def get_user_resumes(user_id):
     return [dict(r) for r in rows]
 
 
-def save_analysis(resume_id, job_title, result):
+def delete_resume(resume_id, user_id):
+    """
+    Delete a resume and its analyses, scoped to user_id so one user can't
+    delete another's data by guessing an id. Returns True if a row was
+    actually deleted.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM analyses WHERE resume_id = ?", (resume_id,))
+    cur.execute("DELETE FROM resumes WHERE id = ? AND user_id = ?", (resume_id, user_id))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
+# ------------------------------------------------------------ analyses ----
+
+
+def save_analysis(resume_id, job_title, result, kind="fit_analysis"):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO analyses (resume_id, job_title, result, created_at) VALUES (?, ?, ?, ?)",
-        (resume_id, job_title, result, datetime.utcnow().isoformat()),
+        "INSERT INTO analyses (resume_id, job_title, result, created_at, kind) VALUES (?, ?, ?, ?, ?)",
+        (resume_id, job_title, result, datetime.utcnow().isoformat(), kind),
     )
     conn.commit()
     conn.close()
@@ -148,6 +181,29 @@ def get_analyses_for_resume(resume_id):
     cur.execute(
         "SELECT * FROM analyses WHERE resume_id = ? ORDER BY created_at DESC",
         (resume_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_all_analyses_for_user(user_id):
+    """
+    All analyses across every resume this user owns, newest first. Used
+    for the dashboard (score history chart, summary stats) rather than
+    the per-resume history view.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT analyses.*, resumes.filename AS resume_filename
+        FROM analyses
+        JOIN resumes ON analyses.resume_id = resumes.id
+        WHERE resumes.user_id = ?
+        ORDER BY analyses.created_at DESC
+        """,
+        (user_id,),
     )
     rows = cur.fetchall()
     conn.close()

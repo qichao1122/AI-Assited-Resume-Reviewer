@@ -3,9 +3,14 @@ import streamlit as st
 import databse
 import job_scraper
 from resume import get_resume, extract_skills
-from analyzer import analyze_job, suggest_resume_improvements, generate_cover_letter
+from analyzer import (
+    analyze_job,
+    suggest_resume_improvements,
+    generate_cover_letter,
+    parse_score,
+)
 
-st.set_page_config(page_title="Job Hunter")
+st.set_page_config(page_title="Job Hunter", page_icon="🧭", layout="wide")
 databse.init_db()
 
 if "user" not in st.session_state:
@@ -19,7 +24,7 @@ if "current_job_title" not in st.session_state:
 
 
 def login_signup():
-    st.title("Job Hunter")
+    st.title("🧭 Job Hunter")
     st.caption("Log in or create an account to upload and save your resume.")
 
     tab_login, tab_signup = st.tabs(["Log in", "Sign up"])
@@ -57,17 +62,24 @@ def login_signup():
                     st.error(msg)
 
 
-def logout(user):
+def render_sidebar(user):
     with st.sidebar:
-        st.write(f"Logged in as **{user['email']}**")
+        st.write(f"👤 **{user['email']}**")
+
+        resumes = databse.get_user_resumes(user["id"])
+        analyses = databse.get_all_analyses_for_user(user["id"])
+        st.metric("Resumes saved", len(resumes))
+        st.metric("Analyses run", len(analyses))
+
+        st.divider()
         if st.button("Log out"):
             st.session_state.user = None
             st.session_state.current_resume_id = None
+            st.session_state.current_job_description = None
             st.rerun()
 
 
-def upload_resume(user):
-    st.title("Resume Reviewer")
+def render_resume_tab(user):
     st.subheader("Your resume")
 
     resume_text = None
@@ -94,6 +106,13 @@ def upload_resume(user):
                 "**Detected skills:**",
                 ", ".join(skills_found) if skills_found else "none detected",
             )
+
+            if st.button("🗑️ Delete this saved resume", type="secondary"):
+                databse.delete_resume(selected["id"], user["id"])
+                st.session_state.current_resume_id = None
+                st.success("Deleted.")
+                st.rerun()
+
             return resume_text, skills_found
 
     resume_file = st.file_uploader("Upload your resume (PDF)", type="pdf")
@@ -120,7 +139,7 @@ def upload_resume(user):
         ", ".join(skills_found) if skills_found else "none detected",
     )
 
-    if st.button("Save resume to my account"):
+    if st.button("💾 Save resume to my account"):
         resume_id = databse.save_resume(user["id"], resume_file.name, resume_text)
         st.session_state.current_resume_id = resume_id
         st.success("Saved. It'll now show up in the dropdown above on your next visit.")
@@ -128,7 +147,7 @@ def upload_resume(user):
     return resume_text, skills_found
 
 
-def job_analysis(resume_text):
+def render_job_match_tab(resume_text):
     st.subheader("Job posting")
     job_title_input = st.text_input(
         "Job title (used to label the result)", placeholder="e.g. Software Engineer"
@@ -142,7 +161,7 @@ def job_analysis(resume_text):
 
     if st.button("Load job description"):
         if not resume_text:
-            st.error("Upload or select a resume first.")
+            st.error("Upload or select a resume first, on the Resume tab.")
         elif not job_url.strip() and not job_text_manual.strip():
             st.error("Enter a job posting URL or paste the description text.")
         else:
@@ -190,13 +209,23 @@ def job_analysis(resume_text):
     if analyze_clicked:
         with st.spinner("Analyzing fit..."):
             result = analyze_job(resume_text, title, job_description_text)
+
         st.subheader("AI Recommendation")
-        st.markdown(f"**{result['title']}**")
-        st.write(result["analysis"])
+        score = parse_score(result["analysis"])
+        if score is not None:
+            score_col, text_col = st.columns([1, 3])
+            with score_col:
+                st.metric(f"Fit score — {result['title']}", f"{score}/100")
+            with text_col:
+                st.write(result["analysis"])
+        else:
+            st.markdown(f"**{result['title']}**")
+            st.write(result["analysis"])
+
         if resume_id:
             databse.save_analysis(resume_id, result["title"], result["analysis"], kind="fit_analysis")
         else:
-            st.info("Save your resume above if you'd like this kept in your history.")
+            st.info("Save your resume on the Resume tab if you'd like this kept in your history.")
 
     if suggest_clicked:
         with st.spinner("Working out improvement suggestions..."):
@@ -206,7 +235,7 @@ def job_analysis(resume_text):
         if resume_id:
             databse.save_analysis(resume_id, title, suggestions, kind="improvement_suggestions")
         else:
-            st.info("Save your resume above if you'd like this kept in your history.")
+            st.info("Save your resume on the Resume tab if you'd like this kept in your history.")
 
     if cover_letter_clicked:
         with st.spinner("Drafting cover letter..."):
@@ -216,7 +245,7 @@ def job_analysis(resume_text):
         if resume_id:
             databse.save_analysis(resume_id, title, cover_letter, kind="cover_letter")
         else:
-            st.info("Save your resume above if you'd like this kept in your history.")
+            st.info("Save your resume on the Resume tab if you'd like this kept in your history.")
 
 
 _KIND_LABELS = {
@@ -226,39 +255,61 @@ _KIND_LABELS = {
 }
 
 
-def resume_history(user):
-    st.subheader("Your saved resumes")
-    resumes = databse.get_user_resumes(user["id"])
-    if not resumes:
-        st.write("No resumes saved yet — upload one above and click **Save resume**.")
-    else:
-        for r in resumes:
-            with st.expander(f"{r['filename']} — uploaded {r['uploaded_at'][:19]}"):
-                preview = r["resume_text"][:500]
-                st.text(preview + ("..." if len(r["resume_text"]) > 500 else ""))
+def render_dashboard_tab(user):
+    analyses = databse.get_all_analyses_for_user(user["id"])
 
-                analyses = databse.get_analyses_for_resume(r["id"])
-                if analyses:
-                    st.markdown("**Past results:**")
-                    for a in analyses:
-                        label = _KIND_LABELS.get(a.get("kind", "fit_analysis"), "Result")
-                        st.markdown(f"*{a['job_title']}* — {label} — {a['created_at'][:19]}")
-                        st.write(a["result"])
-                        st.markdown("---")
+    if not analyses:
+        st.write("No analyses yet — run one from the Job Match tab and it'll show up here.")
+        return
+
+    scored = [(a, parse_score(a["result"])) for a in analyses]
+    scored_only = [(a, s) for a, s in scored if s is not None]
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total analyses", len(analyses))
+    if scored_only:
+        avg_score = round(sum(s for _, s in scored_only) / len(scored_only))
+        best = max(scored_only, key=lambda pair: pair[1])
+        col2.metric("Average fit score", f"{avg_score}/100")
+        col3.metric("Best match", f"{best[1]}/100", help=best[0]["job_title"])
+    else:
+        col2.metric("Average fit score", "—")
+        col3.metric("Best match", "—")
+
+    if scored_only:
+        st.subheader("Fit scores over time")
+        chart_data = {
+            "Score": [s for _, s in reversed(scored_only)],
+        }
+        st.line_chart(chart_data)
+
+    st.subheader("All results")
+    for r in databse.get_user_resumes(user["id"]):
+        r_analyses = databse.get_analyses_for_resume(r["id"])
+        if not r_analyses:
+            continue
+        with st.expander(f"{r['filename']} — {len(r_analyses)} result(s)"):
+            for a in r_analyses:
+                label = _KIND_LABELS.get(a.get("kind", "fit_analysis"), "Result")
+                st.markdown(f"*{a['job_title']}* — {label} — {a['created_at'][:19]}")
+                st.write(a["result"])
+                st.markdown("---")
 
 
 def main_app():
     user = st.session_state.user
+    render_sidebar(user)
 
-    logout(user)
+    tab_resume, tab_job_match, tab_dashboard = st.tabs(["📄 Resume", "🎯 Job Match", "📊 Dashboard"])
 
-    resume_text, _skills_found = upload_resume(user)
-    st.divider()
+    with tab_resume:
+        resume_text, _skills_found = render_resume_tab(user)
 
-    job_analysis(resume_text)
-    st.divider()
+    with tab_job_match:
+        render_job_match_tab(resume_text)
 
-    resume_history(user)
+    with tab_dashboard:
+        render_dashboard_tab(user)
 
 
 if st.session_state.user is None:
